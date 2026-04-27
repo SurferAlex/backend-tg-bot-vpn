@@ -1,0 +1,59 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: vpn
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  migrate:
+    build:
+      context: ./backend/VpnAPI
+    env_file:
+      - ./backend/VpnAPI/.env
+    depends_on:
+      - postgres
+    entrypoint: ["/migrate", "-path", "/migrations", "-cmd", "up"]
+    restart: "no"
+
+  vpnapi:
+    build:
+      context: ./backend/VpnAPI
+    env_file:
+      - ./backend/VpnAPI/.env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    # наружу не публикуем
+
+  bot:
+    build:
+      context: ./bot
+    env_file:
+      - ./bot/.env
+    depends_on:
+      - vpnapi
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    # наружу не публикуем
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: vpnplatform-nginx
+    depends_on:
+      - vpnapi
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - certbot_www:/var/www/certbot
+      - letsencrypt:/etc/letsencrypt
+    restart: unless-stopped
+
+volumes:
+  pgdata: {}
+  letsencrypt: {}
+  certbot_www: {}
