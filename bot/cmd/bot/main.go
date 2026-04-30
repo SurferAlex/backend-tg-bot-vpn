@@ -7,10 +7,10 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"syscall"
 	"tg-bot/internal/api"
+	"tg-bot/internal/botapp"
 	"tg-bot/internal/config"
 	"tg-bot/internal/dedup"
 	"tg-bot/internal/telegram"
@@ -96,7 +96,6 @@ func main() {
 	updates := bot.GetUpdatesChan(u)
 
 	const (
-		cbNewPrefix   = "new:"
 		defaultMaxIPs = 2
 	)
 
@@ -107,48 +106,27 @@ func main() {
 	}
 	pending := map[int64]pendingNew{}
 
-	newKeyMarkup := tgbotapi.NewInlineKeyboardMarkup(
-		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("Создать на 30 дней", cbNewPrefix+"30"),
-		),
-		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("Создать на 60 дней", cbNewPrefix+"60"),
-		),
-		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("Создать на 90 дней", cbNewPrefix+"90"),
-		),
+	type pendingActionKind string
+
+	const (
+		actionGet       pendingActionKind = "get"
+		actionProvision pendingActionKind = "provision"
+		actionRevoke    pendingActionKind = "revoke"
 	)
 
+	type pendingAction struct {
+		kind      pendingActionKind
+		createdAt time.Time
+		chatID    int64
+	}
+
+	pendingActionByUser := map[int64]pendingAction{}
+
+	newKeyMarkup := botapp.NewKeyMarkup()
+	mainMenuMarkup := botapp.MainMenuMarkup()
+	cancelMarkup := botapp.CancelMarkup()
+
 	for update := range updates {
-		if update.CallbackQuery != nil {
-			cb := update.CallbackQuery
-			from := cb.From
-			if from == nil || !isAdmin(from.ID) {
-				_, _ = bot.Request(tgbotapi.NewCallback(cb.ID, "not allowed"))
-				continue
-			}
-
-			data := cb.Data
-			if strings.HasPrefix(data, cbNewPrefix) {
-				daysStr := strings.TrimPrefix(data, cbNewPrefix)
-				days, err := strconv.Atoi(daysStr)
-				if err != nil || (days != 30 && days != 60 && days != 90) {
-					_, _ = bot.Request(tgbotapi.NewCallback(cb.ID, "bad days"))
-					continue
-				}
-
-				pending[from.ID] = pendingNew{days: days, createdAt: time.Now(), chatID: cb.Message.Chat.ID}
-				_, _ = bot.Request(tgbotapi.NewCallback(cb.ID, "ok"))
-
-				msg := tgbotapi.NewMessage(cb.Message.Chat.ID, fmt.Sprintf("Ок. Введите имя клиента для ключа на %d дней (или /cancel).", days))
-				_, _ = bot.Send(msg)
-				continue
-			}
-
-			_, _ = bot.Request(tgbotapi.NewCallback(cb.ID, "unknown action"))
-			continue
-		}
-
 		if update.Message == nil {
 			continue
 		}
@@ -158,7 +136,106 @@ func main() {
 			continue
 		}
 
+		sendMenu := func(chatID int64) {
+			msg := tgbotapi.NewMessage(chatID, "Меню:")
+			msg.ReplyMarkup = mainMenuMarkup
+			_, _ = bot.Send(msg)
+		}
+
+		// Global navigation buttons
+		text := strings.TrimSpace(update.Message.Text)
+		if text == botapp.BtnCancel {
+			delete(pendingActionByUser, from.ID)
+			delete(pending, from.ID)
+			msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Ок, отменено.")
+			msg.ReplyMarkup = mainMenuMarkup
+			_, _ = bot.Send(msg)
+			continue
+		}
+		if text == botapp.BtnBack {
+			sendMenu(update.Message.Chat.ID)
+			continue
+		}
+
 		if !update.Message.IsCommand() {
+			if pa, ok := pendingActionByUser[from.ID]; ok {
+				if time.Since(pa.createdAt) > 5*time.Minute {
+					delete(pendingActionByUser, from.ID)
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Сессия истекла. Откройте меню ещё раз.")
+					msg.ReplyMarkup = mainMenuMarkup
+					_, _ = bot.Send(msg)
+					continue
+				}
+
+				uuidArg := strings.TrimSpace(update.Message.Text)
+				if uuidArg == "" {
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "UUID пустой. Введите client_uuid или нажмите «Отмена».")
+					msg.ReplyMarkup = cancelMarkup
+					_, _ = bot.Send(msg)
+					continue
+				}
+
+				delete(pendingActionByUser, from.ID)
+
+				switch pa.kind {
+				case actionGet:
+					a, err := vpn.GetAccess(ctx, uuidArg)
+					if err != nil {
+						log.Printf("get access failed (clientUuid=%s): %v", uuidArg, err)
+						msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Не удалось получить доступ. Проверьте UUID и попробуйте ещё раз.")
+						msg.ReplyMarkup = mainMenuMarkup
+						_, _ = bot.Send(msg)
+						continue
+					}
+					_, _ = bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, a.VLESSURI))
+
+				case actionProvision:
+					a, err := vpn.Provision(ctx, uuidArg)
+					if err != nil {
+						log.Printf("provision failed (clientUuid=%s): %v", uuidArg, err)
+						msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Не удалось выдать доступ. Проверьте UUID и попробуйте ещё раз.")
+						msg.ReplyMarkup = mainMenuMarkup
+						_, _ = bot.Send(msg)
+						continue
+					}
+					_, _ = bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, a.VLESSURI))
+
+				case actionRevoke:
+					if err := vpn.Revoke(ctx, uuidArg); err != nil {
+						log.Printf("revoke failed (clientUuid=%s): %v", uuidArg, err)
+						msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Не удалось отозвать ключ. Проверьте UUID и попробуйте ещё раз.")
+						msg.ReplyMarkup = mainMenuMarkup
+						_, _ = bot.Send(msg)
+						continue
+					}
+					_, _ = bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, "Ключ успешно отозван."))
+				}
+
+				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Меню:")
+				msg.ReplyMarkup = mainMenuMarkup
+				_, _ = bot.Send(msg)
+				continue
+			}
+
+			// Create key: choose days
+			switch text {
+			case botapp.BtnDays30, botapp.BtnDays60, botapp.BtnDays90:
+				var days int
+				switch text {
+				case botapp.BtnDays30:
+					days = 30
+				case botapp.BtnDays60:
+					days = 60
+				case botapp.BtnDays90:
+					days = 90
+				}
+				pending[from.ID] = pendingNew{days: days, createdAt: time.Now(), chatID: update.Message.Chat.ID}
+				msg := tgbotapi.NewMessage(update.Message.Chat.ID, fmt.Sprintf("Ок. Введите имя клиента для ключа на %d дней (или нажмите «Отмена»).", days))
+				msg.ReplyMarkup = cancelMarkup
+				_, _ = bot.Send(msg)
+				continue
+			}
+
 			if p, ok := pending[from.ID]; ok {
 				if time.Since(p.createdAt) > 5*time.Minute {
 					delete(pending, from.ID)
@@ -216,15 +293,43 @@ func main() {
 				}
 				continue
 			}
+
+			// Main menu actions
+			switch text {
+			case botapp.BtnCreate:
+				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Выбери срок:")
+				msg.ReplyMarkup = newKeyMarkup
+				_, _ = bot.Send(msg)
+				continue
+			case botapp.BtnAccess:
+				pendingActionByUser[from.ID] = pendingAction{kind: actionGet, createdAt: time.Now(), chatID: update.Message.Chat.ID}
+				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Введите client_uuid (или нажмите «Отмена»):")
+				msg.ReplyMarkup = cancelMarkup
+				_, _ = bot.Send(msg)
+				continue
+			case botapp.BtnProvision:
+				pendingActionByUser[from.ID] = pendingAction{kind: actionProvision, createdAt: time.Now(), chatID: update.Message.Chat.ID}
+				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Введите client_uuid для provision (или нажмите «Отмена»):")
+				msg.ReplyMarkup = cancelMarkup
+				_, _ = bot.Send(msg)
+				continue
+			case botapp.BtnRevoke:
+				pendingActionByUser[from.ID] = pendingAction{kind: actionRevoke, createdAt: time.Now(), chatID: update.Message.Chat.ID}
+				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Введите client_uuid для revoke (или нажмите «Отмена»):")
+				msg.ReplyMarkup = cancelMarkup
+				_, _ = bot.Send(msg)
+				continue
+			}
 		}
 
 		if update.Message.IsCommand() {
 			switch update.Message.Command() {
 			case "start":
-				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Ок, я на связи. Это приватный бот.")
-				_, _ = bot.Send(msg)
+				sendMenu(update.Message.Chat.ID)
+			case "menu":
+				sendMenu(update.Message.Chat.ID)
 			case "help":
-				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Команды: /start, /help, /new, /cancel, /get <uuid>, /provision <uuid>, /revoke <uuid>")
+				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Команды: /start, /help, /new, /cancel, /get, /provision, /revoke")
 				_, _ = bot.Send(msg)
 			case "new":
 				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Выбери срок:")
@@ -233,8 +338,18 @@ func main() {
 			case "cancel":
 				if _, ok := pending[from.ID]; ok {
 					delete(pending, from.ID)
-					_, _ = bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, "Ок, отменено."))
+					delete(pendingActionByUser, from.ID)
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Отменено.")
+					msg.ReplyMarkup = mainMenuMarkup
+					_, _ = bot.Send(msg)
 				} else {
+					if _, ok := pendingActionByUser[from.ID]; ok {
+						delete(pendingActionByUser, from.ID)
+						msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Отменено.")
+						msg.ReplyMarkup = mainMenuMarkup
+						_, _ = bot.Send(msg)
+						continue
+					}
 					_, _ = bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, "Нечего отменять."))
 				}
 			case "get":
