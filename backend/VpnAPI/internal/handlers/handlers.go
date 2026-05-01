@@ -7,7 +7,7 @@ import (
 )
 
 type Handlers struct {
-	DB      *pgxpool.Pool
-	Clients *usecase.VPNClients
+	DB        *pgxpool.Pool
+	Clients   *usecase.VPNClients
 	XUIAccess *usecase.XUIAccess
 }

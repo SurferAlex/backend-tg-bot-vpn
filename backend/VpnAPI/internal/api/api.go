@@ -76,8 +76,8 @@ func RegisterRoutes(r *gin.Engine, h *handlers.Handlers, internalToken string) {
 		protected.POST("/clients", h.CreateClient)
 		protected.GET("/clients/:uuid", h.GetClient)
 		protected.POST("/clients/:uuid/deactivate", h.DeactivateClient)
-		// protected.POST("/clients/:uuid/provision", h.ProvisionAccess)
-		// protected.GET("/clients/:uuid/access", h.GetAccess)
-		// protected.POST("/clients/:uuid/revoke", h.RevokeAccess)
+		protected.POST("/clients/:uuid/provision", h.ProvisionAccess)
+		protected.GET("/clients/:uuid/access", h.GetAccess)
+		protected.POST("/clients/:uuid/revoke", h.RevokeAccess)
 	}
 }
