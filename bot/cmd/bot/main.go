@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"html"
 	"log"
 	"net/http"
 	"os"
@@ -95,12 +96,9 @@ func main() {
 
 	updates := bot.GetUpdatesChan(u)
 
-	const (
-		defaultMaxIPs = 2
-	)
-
 	type pendingNew struct {
 		days      int
+		maxIPs    int
 		createdAt time.Time
 		chatID    int64
 	}
@@ -123,6 +121,7 @@ func main() {
 	pendingActionByUser := map[int64]pendingAction{}
 
 	newKeyMarkup := botapp.NewKeyMarkup()
+	maxIPsMarkup := botapp.MaxIPsMarkup()
 	mainMenuMarkup := botapp.MainMenuMarkup()
 	cancelMarkup := botapp.CancelMarkup()
 
@@ -230,16 +229,40 @@ func main() {
 					days = 90
 				}
 				pending[from.ID] = pendingNew{days: days, createdAt: time.Now(), chatID: update.Message.Chat.ID}
-				msg := tgbotapi.NewMessage(update.Message.Chat.ID, fmt.Sprintf("Ок. Введите имя клиента для ключа на %d дней (или нажмите «Отмена»).", days))
-				msg.ReplyMarkup = cancelMarkup
+				msg := tgbotapi.NewMessage(update.Message.Chat.ID, fmt.Sprintf("Срок: %d дней. Выбери лимит IP:", days))
+				msg.ReplyMarkup = maxIPsMarkup
 				_, _ = bot.Send(msg)
 				continue
+			}
+
+			if maxIPs, ok := botapp.ParseMaxIPsButton(text); ok {
+				if p, exists := pending[from.ID]; exists && p.maxIPs == 0 {
+					if time.Since(p.createdAt) > 5*time.Minute {
+						delete(pending, from.ID)
+						_, _ = bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, "Сессия создания истекла. Нажмите /new ещё раз."))
+						continue
+					}
+					p.maxIPs = maxIPs
+					pending[from.ID] = p
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID,
+						fmt.Sprintf("Лимит: %d IP. Введите имя клиента (или «Отмена»).", maxIPs))
+					msg.ReplyMarkup = cancelMarkup
+					_, _ = bot.Send(msg)
+					continue
+				}
 			}
 
 			if p, ok := pending[from.ID]; ok {
 				if time.Since(p.createdAt) > 5*time.Minute {
 					delete(pending, from.ID)
 					_, _ = bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, "Сессия создания истекла. Нажмите /new ещё раз."))
+					continue
+				}
+
+				if p.maxIPs == 0 {
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Сначала выбери лимит IP:")
+					msg.ReplyMarkup = maxIPsMarkup
+					_, _ = bot.Send(msg)
 					continue
 				}
 
@@ -261,7 +284,7 @@ func main() {
 
 				client, err := vpn.CreateClient(ctx, vpnapi.CreateClientRequest{
 					TelegramUserID: nil,
-					MaxIPs:         defaultMaxIPs,
+					MaxIPs:         p.maxIPs,
 					TTLSeconds:     ttlSeconds,
 					Note:           &note,
 				})
@@ -277,8 +300,13 @@ func main() {
 					continue
 				}
 
-				info := fmt.Sprintf("Имя: %s\nСрок: %d дней\nВнутренний UUID (для /revoke): %s", name, p.days, client.ClientUUID)
-				if _, err := bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, info)); err != nil {
+				info := fmt.Sprintf(
+					"Имя: %s\nСрок: %d дней\nЛимит IP: %d\nВнутренний UUID (для /revoke): <code>%s</code>",
+					html.EscapeString(name), p.days, p.maxIPs, client.ClientUUID,
+				)
+				infoMsg := tgbotapi.NewMessage(update.Message.Chat.ID, info)
+				infoMsg.ParseMode = tgbotapi.ModeHTML
+				if _, err := bot.Send(infoMsg); err != nil {
 					log.Printf("send info message failed: %v", err)
 				}
 				time.Sleep(300 * time.Millisecond)
@@ -288,7 +316,9 @@ func main() {
 				}
 				time.Sleep(300 * time.Millisecond)
 
-				if _, err := bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, client.ClientUUID)); err != nil {
+				uuidMsg := tgbotapi.NewMessage(update.Message.Chat.ID, "<code>"+client.ClientUUID+"</code>")
+				uuidMsg.ParseMode = tgbotapi.ModeHTML
+				if _, err := bot.Send(uuidMsg); err != nil {
 					log.Printf("send uuid failed: %v", err)
 				}
 				continue
