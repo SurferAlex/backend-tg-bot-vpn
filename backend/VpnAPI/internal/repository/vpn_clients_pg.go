@@ -74,6 +74,30 @@ RETURNING id, client_uuid, telegram_user_id, max_ips, key_expires_at, is_active,
 	return c, err
 }
 
+func (r *VPNClientsRepo) ListMonitorTargets(ctx context.Context, now time.Time) ([]model.MonitorTarget, error) {
+	const q = `
+SELECT c.client_uuid, c.max_ips, xa.xui_client_email
+FROM vpn_clients c
+INNER JOIN xui_access xa ON xa.client_uuid = c.client_uuid
+WHERE c.is_active = true AND c.key_expires_at > $1;
+`
+	rows, err := r.db.Query(ctx, q, now.UTC())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []model.MonitorTarget
+	for rows.Next() {
+		var t model.MonitorTarget
+		if err := rows.Scan(&t.ClientUUID, &t.MaxIPs, &t.XUIClientEmail); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
 func (r *VPNClientsRepo) Deactivate(ctx context.Context, clientUUID uuid.UUID) error {
 	const q = `
 UPDATE vpn_clients

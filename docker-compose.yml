@@ -40,6 +40,24 @@ services:
       - 8.8.8.8
     # наружу не публикуем
 
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+
+  monitor:
+    build:
+      context: ./monitor
+    env_file:
+      - ./monitor/.env
+    depends_on:
+      - vpnapi
+      - redis
+      - bot
+    volumes:
+      # 3x-ui: ./db/access.log на хосте → укажите каталог в XRAY_ACCESS_LOG_HOST_DIR
+      - ${XRAY_ACCESS_LOG_HOST_DIR:-/var/log/xray}:/var/log/xray:ro
+    restart: unless-stopped
+
   nginx:
     image: nginx:1.27-alpine
     container_name: vpnplatform-nginx
