@@ -4,6 +4,7 @@ import (
 	"api-vpn/internal/model"
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/gofrs/uuid/v5"
@@ -12,6 +13,7 @@ import (
 var ErrNotFound = errors.New("not found")
 var ErrInactive = errors.New("inactive")
 var ErrExpired = errors.New("expired")
+var ErrInvalidServer = errors.New("invalid server")
 
 type VPNClientsRepo interface {
 	GetByUUID(ctx context.Context, id uuid.UUID) (model.VPNClient, error)
@@ -45,6 +47,10 @@ func (uc *VPNClients) GetActiveByUUID(ctx context.Context, id uuid.UUID) (model.
 func (uc *VPNClients) Create(ctx context.Context, p model.CreateVPNClientParams) (model.VPNClient, error) {
 	if p.MaxIPs <= 0 {
 		p.MaxIPs = 2
+	}
+	p.ServerID = strings.TrimSpace(p.ServerID)
+	if p.ServerID == "" {
+		return model.VPNClient{}, ErrInvalidServer
 	}
 	return uc.repo.Create(ctx, p)
 }

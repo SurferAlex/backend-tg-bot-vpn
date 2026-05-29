@@ -31,19 +31,17 @@ func main() {
 	}
 	defer pool.Close()
 
-	router := api.SetupServer(pool, cfg.InternalToken, api.XUISetup{
-		BaseURL:      cfg.XUI.BaseURL,
-		Username:     cfg.XUI.Username,
-		Password:     cfg.XUI.Password,
-		InboundID:    cfg.XUI.InboundID,
-		ExternalHost: cfg.XUI.ExternalHost,
-		Fingerprint:  cfg.XUI.Fingerprint,
-		SpiderX:      cfg.XUI.SpiderX,
-		Flow:         cfg.XUI.Flow,
-		HostHeader:   cfg.XUI.HostHeader,
-		ServerName:   cfg.XUI.ServerName,
-		InsecureSkipVerify: cfg.XUI.InsecureSkipVerify,
-	})
+	serversRepo := repository.NewVPNServersRepo(pool)
+	if err := repository.SyncDefaultServerFromEnv(ctx, serversRepo, cfg.XUI); err != nil {
+		logger.Error("sync default vpn server from env", "error", err)
+		os.Exit(1)
+	}
+	if err := repository.EnsureOptionalServersFromEnv(ctx, serversRepo, cfg.OptionalServers); err != nil {
+		logger.Error("bootstrap optional vpn servers from env", "error", err)
+		os.Exit(1)
+	}
+
+	router := api.SetupServer(pool, cfg.InternalToken)
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,

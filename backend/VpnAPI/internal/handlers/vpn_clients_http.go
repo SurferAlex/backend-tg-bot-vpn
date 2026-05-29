@@ -13,6 +13,7 @@ import (
 )
 
 type CreateClientRequest struct {
+	ServerID       string  `json:"serverId"`
 	TelegramUserID *int64  `json:"telegramUserId"`
 	MaxIPs         int     `json:"maxIps"`
 	TTLSeconds     int64   `json:"ttlSeconds"`
@@ -21,6 +22,7 @@ type CreateClientRequest struct {
 type ClientResponse struct {
 	ID             int64     `json:"id"`
 	ClientUUID     string    `json:"clientUuid"`
+	ServerID       string    `json:"serverId"`
 	TelegramUserID *int64    `json:"telegramUserId,omitempty"`
 	MaxIPs         int       `json:"maxIps"`
 	KeyExpiresAt   time.Time `json:"keyExpiresAt"`
@@ -34,6 +36,7 @@ func toClientResponse(c model.VPNClient) ClientResponse {
 	return ClientResponse{
 		ID:             c.ID,
 		ClientUUID:     c.ClientUUID.String(),
+		ServerID:       c.ServerID,
 		TelegramUserID: c.TelegramUserID,
 		MaxIPs:         c.MaxIPs,
 		KeyExpiresAt:   c.KeyExpiresAt,
@@ -58,14 +61,28 @@ func (h *Handlers) CreateClient(c *gin.Context) {
 	if ttl <= 0 {
 		ttl = 24 * 60 * 60
 	}
+	if _, err := h.Servers.GetActiveByID(c.Request.Context(), req.ServerID); err != nil {
+		if errors.Is(err, usecase.ErrNotFound) || errors.Is(err, usecase.ErrInvalidServer) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid serverId"})
+			return
+		}
+		log.Printf("validate server failed: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
+	}
 	client, err := h.Clients.Create(c.Request.Context(), model.CreateVPNClientParams{
 		ClientUUID:     u,
+		ServerID:       req.ServerID,
 		TelegramUserID: req.TelegramUserID,
 		MaxIPs:         req.MaxIPs,
 		KeyExpiresAt:   time.Now().Add(time.Duration(ttl) * time.Second),
 		Note:           req.Note,
 	})
 	if err != nil {
+		if errors.Is(err, usecase.ErrInvalidServer) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid serverId"})
+			return
+		}
 		log.Printf("create client failed: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
 		return

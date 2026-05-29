@@ -11,7 +11,13 @@ import (
 	"time"
 )
 
+type Server struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 type CreateClientRequest struct {
+	ServerID       string  `json:"serverId"`
 	TelegramUserID *int64  `json:"telegramUserId,omitempty"`
 	MaxIPs         int     `json:"maxIps"`
 	TTLSeconds     int64   `json:"ttlSeconds"`
@@ -21,6 +27,7 @@ type CreateClientRequest struct {
 type Client struct {
 	ID             int64     `json:"id"`
 	ClientUUID     string    `json:"clientUuid"`
+	ServerID       string    `json:"serverId"`
 	TelegramUserID *int64    `json:"telegramUserId,omitempty"`
 	MaxIPs         int       `json:"maxIps"`
 	KeyExpiresAt   time.Time `json:"keyExpiresAt"`
@@ -44,6 +51,33 @@ func New(baseURL, token string) *API {
 			Timeout: 5 * time.Second,
 		},
 	}
+}
+
+func (a *API) ListServers(ctx context.Context) ([]Server, error) {
+	u := a.baseURL + "/api/v1/servers"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("X-Internal-Token", a.token)
+
+	resp, err := a.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("vpnapi list servers request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("vpnapi list servers: status %d", resp.StatusCode)
+	}
+
+	var out struct {
+		Servers []Server `json:"servers"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("vpnapi list servers: decode response failed: %w", err)
+	}
+	return out.Servers, nil
 }
 
 func (a *API) CreateClient(ctx context.Context, req CreateClientRequest) (Client, error) {

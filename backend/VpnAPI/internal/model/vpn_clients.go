@@ -9,6 +9,7 @@ import (
 type VPNClient struct {
 	ID             int64
 	ClientUUID     uuid.UUID
+	ServerID       string
 	TelegramUserID *int64
 	MaxIPs         int
 	KeyExpiresAt   time.Time
@@ -20,6 +21,7 @@ type VPNClient struct {
 
 type CreateVPNClientParams struct {
 	ClientUUID     uuid.UUID
+	ServerID       string
 	TelegramUserID *int64
 	MaxIPs         int
 	KeyExpiresAt   time.Time

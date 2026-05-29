@@ -97,12 +97,43 @@ func main() {
 	updates := bot.GetUpdatesChan(u)
 
 	type pendingNew struct {
-		days      int
-		maxIPs    int
-		createdAt time.Time
-		chatID    int64
+		serverID   string
+		serverName string
+		days       int
+		maxIPs     int
+		createdAt  time.Time
+		chatID     int64
 	}
 	pending := map[int64]pendingNew{}
+
+	listServerLabels := func() ([]botapp.ServerLabel, error) {
+		servers, err := vpn.ListServers(ctx)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]botapp.ServerLabel, 0, len(servers))
+		for _, s := range servers {
+			out = append(out, botapp.ServerLabel{ID: s.ID, Name: s.Name})
+		}
+		return out, nil
+	}
+
+	startCreateFlow := func(chatID, userID int64) {
+		labels, err := listServerLabels()
+		if err != nil {
+			log.Printf("list servers failed: %v", err)
+			_, _ = bot.Send(tgbotapi.NewMessage(chatID, "Не удалось загрузить список серверов. Попробуйте позже."))
+			return
+		}
+		if len(labels) == 0 {
+			_, _ = bot.Send(tgbotapi.NewMessage(chatID, "Нет доступных VPN-серверов. Добавьте сервер в VpnAPI (таблица vpn_servers)."))
+			return
+		}
+		pending[userID] = pendingNew{createdAt: time.Now(), chatID: chatID}
+		msg := tgbotapi.NewMessage(chatID, "Выбери сервер:")
+		msg.ReplyMarkup = botapp.ServersMarkup(labels)
+		_, _ = bot.Send(msg)
+	}
 
 	type pendingActionKind string
 
@@ -216,9 +247,38 @@ func main() {
 				continue
 			}
 
+			if labels, err := listServerLabels(); err == nil {
+				if serverID, ok := botapp.ParseServerButton(text, labels); ok {
+					if p, exists := pending[from.ID]; exists && p.serverID == "" {
+						if time.Since(p.createdAt) > 5*time.Minute {
+							delete(pending, from.ID)
+							_, _ = bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, "Сессия создания истекла. Нажмите /new ещё раз."))
+							continue
+						}
+						for _, lb := range labels {
+							if lb.ID == serverID {
+								p.serverName = lb.Name
+								break
+							}
+						}
+						p.serverID = serverID
+						pending[from.ID] = p
+						msg := tgbotapi.NewMessage(update.Message.Chat.ID, fmt.Sprintf("Сервер: %s\nВыбери срок:", p.serverName))
+						msg.ReplyMarkup = newKeyMarkup
+						_, _ = bot.Send(msg)
+						continue
+					}
+				}
+			}
+
 			// Create key: choose days
 			switch text {
 			case botapp.BtnDays30, botapp.BtnDays60, botapp.BtnDays90:
+				p, exists := pending[from.ID]
+				if !exists || p.serverID == "" {
+					startCreateFlow(update.Message.Chat.ID, from.ID)
+					continue
+				}
 				var days int
 				switch text {
 				case botapp.BtnDays30:
@@ -228,7 +288,13 @@ func main() {
 				case botapp.BtnDays90:
 					days = 90
 				}
-				pending[from.ID] = pendingNew{days: days, createdAt: time.Now(), chatID: update.Message.Chat.ID}
+				if time.Since(p.createdAt) > 5*time.Minute {
+					delete(pending, from.ID)
+					_, _ = bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, "Сессия создания истекла. Нажмите /new ещё раз."))
+					continue
+				}
+				p.days = days
+				pending[from.ID] = p
 				msg := tgbotapi.NewMessage(update.Message.Chat.ID, fmt.Sprintf("Срок: %d дней. Выбери лимит IP:", days))
 				msg.ReplyMarkup = maxIPsMarkup
 				_, _ = bot.Send(msg)
@@ -236,7 +302,7 @@ func main() {
 			}
 
 			if maxIPs, ok := botapp.ParseMaxIPsButton(text); ok {
-				if p, exists := pending[from.ID]; exists && p.maxIPs == 0 {
+				if p, exists := pending[from.ID]; exists && p.serverID != "" && p.maxIPs == 0 {
 					if time.Since(p.createdAt) > 5*time.Minute {
 						delete(pending, from.ID)
 						_, _ = bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, "Сессия создания истекла. Нажмите /new ещё раз."))
@@ -259,6 +325,16 @@ func main() {
 					continue
 				}
 
+				if p.serverID == "" {
+					startCreateFlow(update.Message.Chat.ID, from.ID)
+					continue
+				}
+				if p.days == 0 {
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Сначала выбери срок:")
+					msg.ReplyMarkup = newKeyMarkup
+					_, _ = bot.Send(msg)
+					continue
+				}
 				if p.maxIPs == 0 {
 					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Сначала выбери лимит IP:")
 					msg.ReplyMarkup = maxIPsMarkup
@@ -283,6 +359,7 @@ func main() {
 				note := name
 
 				client, err := vpn.CreateClient(ctx, vpnapi.CreateClientRequest{
+					ServerID:       p.serverID,
 					TelegramUserID: nil,
 					MaxIPs:         p.maxIPs,
 					TTLSeconds:     ttlSeconds,
@@ -301,8 +378,8 @@ func main() {
 				}
 
 				info := fmt.Sprintf(
-					"Имя: %s\nСрок: %d дней\nЛимит IP: %d\nВнутренний UUID (для /revoke): <code>%s</code>",
-					html.EscapeString(name), p.days, p.maxIPs, client.ClientUUID,
+					"Сервер: %s\nИмя: %s\nСрок: %d дней\nЛимит IP: %d\nВнутренний UUID (для /revoke): <code>%s</code>",
+					html.EscapeString(p.serverName), html.EscapeString(name), p.days, p.maxIPs, client.ClientUUID,
 				)
 				infoMsg := tgbotapi.NewMessage(update.Message.Chat.ID, info)
 				infoMsg.ParseMode = tgbotapi.ModeHTML
@@ -327,9 +404,7 @@ func main() {
 			// Main menu actions
 			switch text {
 			case botapp.BtnCreate:
-				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Выбери срок:")
-				msg.ReplyMarkup = newKeyMarkup
-				_, _ = bot.Send(msg)
+				startCreateFlow(update.Message.Chat.ID, from.ID)
 				continue
 			case botapp.BtnAccess:
 				pendingActionByUser[from.ID] = pendingAction{kind: actionGet, createdAt: time.Now(), chatID: update.Message.Chat.ID}
@@ -362,9 +437,7 @@ func main() {
 				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Команды: /start, /help, /new, /cancel, /get, /provision, /revoke")
 				_, _ = bot.Send(msg)
 			case "new":
-				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Выбери срок:")
-				msg.ReplyMarkup = newKeyMarkup
-				_, _ = bot.Send(msg)
+				startCreateFlow(update.Message.Chat.ID, from.ID)
 			case "cancel":
 				if _, ok := pending[from.ID]; ok {
 					delete(pending, from.ID)

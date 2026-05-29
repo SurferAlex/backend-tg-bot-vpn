@@ -38,3 +38,13 @@
 
 - **E1** — inline-кнопки, `callback_query`.
 - **E2** — клиент 3x-ui, выдача ключа/ссылки по согласованному контракту.
+
+## 4. Несколько VPN-серверов (control-plane)
+
+- Панели 3x-ui хранятся в таблице `vpn_servers` (миграция `000003`).
+- При старте VpnAPI строка `default` синхронизируется из `XUI_*` в `.env` (первый VPS).
+- Второй и следующие узлы — `INSERT` в `vpn_servers` (см. `deploy/servers.example.sql`).
+- API: `GET /api/v1/servers`, при создании клиента — `serverId` в `POST /api/v1/clients`.
+- Provision/Revoke идут в 3x-ui того сервера, который записан у клиента.
+- VpnAPI на control-plane VPS должен достучаться до `xui_base_url` каждого узла по сети.
+- Вторая панель из env: блок `VPN_SERVER_VPS1_*` в `backend/VpnAPI/.env` (см. `.env.example`) — при старте строка создаётся **один раз**, если `vps_1` ещё нет в БД.
