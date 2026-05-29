@@ -21,25 +21,15 @@ type XUIAccessRepo interface {
 type XUIAccess struct {
 	repo      XUIAccessRepo
 	clientsUC *VPNClients
-	xui       *xui.Client
-	inboundID int64
-	external  string
-	fp        string
-	spiderX   string
-	flow      string
+	registry  *XUIRegistry
 	now       func() time.Time
 }
 
-func NewXUIAccess(repo XUIAccessRepo, clientsUC *VPNClients, xuiClient *xui.Client, inboundID int64, externalHost, fp, spiderX, flow string) *XUIAccess {
+func NewXUIAccess(repo XUIAccessRepo, clientsUC *VPNClients, registry *XUIRegistry) *XUIAccess {
 	return &XUIAccess{
 		repo:      repo,
 		clientsUC: clientsUC,
-		xui:       xuiClient,
-		inboundID: inboundID,
-		external:  externalHost,
-		fp:        fp,
-		spiderX:   spiderX,
-		flow:      flow,
+		registry:  registry,
 		now:       time.Now,
 	}
 }
@@ -54,6 +44,11 @@ func (uc *XUIAccess) Provision(ctx context.Context, clientUUID uuid.UUID) (model
 		return model.XUIAccess{}, err
 	}
 
+	sx, err := uc.registry.forServer(ctx, client.ServerID)
+	if err != nil {
+		return model.XUIAccess{}, err
+	}
+
 	displayName := client.ClientUUID.String()
 	if client.Note != nil {
 		if n := strings.TrimSpace(*client.Note); n != "" {
@@ -64,22 +59,22 @@ func (uc *XUIAccess) Provision(ctx context.Context, clientUUID uuid.UUID) (model
 	expiryMs := client.KeyExpiresAt.UTC().UnixMilli()
 	limitIP := client.MaxIPs
 
-	if err := uc.xui.AddOrUpdateVLESSClient(ctx, uc.inboundID, client.ClientUUID.String(), xuiEmail, limitIP, expiryMs, uc.flow); err != nil {
+	if err := sx.client.AddOrUpdateVLESSClient(ctx, sx.inbound, client.ClientUUID.String(), xuiEmail, limitIP, expiryMs, sx.flow); err != nil {
 		return model.XUIAccess{}, err
 	}
 
-	inb, ss, err := uc.xui.GetInbound(ctx, uc.inboundID)
+	inb, ss, err := sx.client.GetInbound(ctx, sx.inbound)
 	if err != nil {
 		return model.XUIAccess{}, err
 	}
-	uri, err := xui.BuildVLESSRealityURI(uc.external, inb.Port, client.ClientUUID.String(), displayName, ss, uc.fp, uc.spiderX, uc.flow)
+	uri, err := xui.BuildVLESSRealityURI(sx.external, inb.Port, client.ClientUUID.String(), displayName, ss, sx.fp, sx.spiderX, sx.flow)
 	if err != nil {
 		return model.XUIAccess{}, err
 	}
 
 	return uc.repo.Upsert(ctx, model.UpsertXUIAccessParams{
 		ClientUUID:     client.ClientUUID,
-		InboundID:      uc.inboundID,
+		InboundID:      sx.inbound,
 		XUIClientEmail: xuiEmail,
 		VLESSURI:       uri,
 	})
@@ -116,11 +111,20 @@ func makeXUIEmail(displayName string, uuidStr string) string {
 }
 
 func (uc *XUIAccess) Revoke(ctx context.Context, clientUUID uuid.UUID) error {
+	client, err := uc.clientsUC.GetByUUID(ctx, clientUUID)
+	if err != nil {
+		return err
+	}
 	a, err := uc.repo.GetByClientUUID(ctx, clientUUID)
 	if err != nil {
 		return err
 	}
-	if err := uc.xui.DeleteClientByEmail(ctx, a.InboundID, a.XUIClientEmail); err != nil {
+
+	sx, err := uc.registry.forServer(ctx, client.ServerID)
+	if err != nil {
+		return err
+	}
+	if err := sx.client.DeleteClientByEmail(ctx, a.InboundID, a.XUIClientEmail); err != nil {
 		return fmt.Errorf("xui delete: %w", err)
 	}
 	_ = uc.repo.DeleteByClientUUID(ctx, clientUUID)

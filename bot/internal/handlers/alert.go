@@ -45,11 +45,11 @@ func (h *Handlers) Alert(c *gin.Context) {
 		} else {
 
 			text += "\n---"
-			text += "\nmaxIps: " + fmt.Sprintf("%d", client.MaxIPs)
-			text += "\nkeyExpiresAt: " + client.KeyExpiresAt.Format(time.RFC3339)
-			text += "\nisActive: " + fmt.Sprintf("%v", client.IsActive)
+			text += "\nIP-Limit: " + fmt.Sprintf("%d", client.MaxIPs)
+			text += "\nСрок: " + client.KeyExpiresAt.Format(time.RFC3339)
+			text += "\nАктивность: " + fmt.Sprintf("%v", client.IsActive)
 			if client.Note != nil && strings.TrimSpace(*client.Note) != "" {
-				text += "\nnote: " + strings.TrimSpace(*client.Note)
+				text += "\nКлиент: " + strings.TrimSpace(*client.Note)
 			}
 		}
 	}

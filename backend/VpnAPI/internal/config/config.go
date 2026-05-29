@@ -3,13 +3,22 @@ package config
 import (
 	"os"
 	"strconv"
+	"strings"
 )
 
 type Config struct {
-	HTTPAddr      string
-	DatabaseDNS   string
-	InternalToken string
-	XUI           XUIConfig
+	HTTPAddr         string
+	DatabaseDNS      string
+	InternalToken    string
+	XUI              XUIConfig
+	OptionalServers  []OptionalVPNServer
+}
+
+// OptionalVPNServer is bootstrapped once (insert if missing) when env is set.
+type OptionalVPNServer struct {
+	ID   string
+	Name string
+	XUI  XUIConfig
 }
 
 type XUIConfig struct {
@@ -44,8 +53,49 @@ func LoadConfig() Config {
 			ServerName:   getEnv("XUI_SERVER_NAME", ""),
 			InsecureSkipVerify: getEnv("XUI_INSECURE_SKIP_VERIFY", "") == "1",
 		},
+		OptionalServers: loadOptionalVPNServers(),
 	}
 	return cfg
+}
+
+func loadOptionalVPNServers() []OptionalVPNServer {
+	var out []OptionalVPNServer
+	if s, ok := loadOptionalServerEnv("VPN_SERVER_VPS1", "vps_1", "VPS 1"); ok {
+		out = append(out, s)
+	}
+	return out
+}
+
+func loadOptionalServerEnv(prefix, defaultID, defaultName string) (OptionalVPNServer, bool) {
+	baseURL := strings.TrimSpace(os.Getenv(prefix + "_XUI_BASE_URL"))
+	if baseURL == "" {
+		return OptionalVPNServer{}, false
+	}
+	id := strings.TrimSpace(os.Getenv(prefix + "_ID"))
+	if id == "" {
+		id = defaultID
+	}
+	name := strings.TrimSpace(os.Getenv(prefix + "_NAME"))
+	if name == "" {
+		name = defaultName
+	}
+	return OptionalVPNServer{
+		ID:   id,
+		Name: name,
+		XUI: XUIConfig{
+			BaseURL:            baseURL,
+			Username:           mustEnv(prefix + "_XUI_USERNAME"),
+			Password:           mustEnv(prefix + "_XUI_PASSWORD"),
+			InboundID:          mustEnvInt64(prefix + "_XUI_INBOUND_ID"),
+			ExternalHost:       mustEnv(prefix + "_XUI_EXTERNAL_HOST"),
+			Fingerprint:        getEnv(prefix+"_XUI_FINGERPRINT", "chrome"),
+			SpiderX:            getEnv(prefix+"_XUI_SPIDERX", "/"),
+			Flow:               getEnv(prefix+"_XUI_FLOW", ""),
+			HostHeader:         getEnv(prefix+"_XUI_HOST_HEADER", ""),
+			ServerName:         getEnv(prefix+"_XUI_SERVER_NAME", ""),
+			InsecureSkipVerify: getEnv(prefix+"_XUI_INSECURE_SKIP_VERIFY", "") == "1",
+		},
+	}, true
 }
 func getEnv(key, def string) string {
 	if v := os.Getenv(key); v != "" {

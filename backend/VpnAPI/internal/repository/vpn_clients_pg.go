@@ -24,7 +24,7 @@ func NewVPNClientsRepo(db *pgxpool.Pool) *VPNClientsRepo {
 func (r *VPNClientsRepo) GetByUUID(ctx context.Context, clientUUID uuid.UUID) (model.VPNClient, error) {
 	const q = `
 SELECT
-  id, client_uuid, telegram_user_id, max_ips, key_expires_at, is_active, note, created_at, updated_at
+  id, client_uuid, server_id, telegram_user_id, max_ips, key_expires_at, is_active, note, created_at, updated_at
 FROM vpn_clients
 WHERE client_uuid = $1
 LIMIT 1;
@@ -33,6 +33,7 @@ LIMIT 1;
 	err := r.db.QueryRow(ctx, q, clientUUID).Scan(
 		&c.ID,
 		&c.ClientUUID,
+		&c.ServerID,
 		&c.TelegramUserID,
 		&c.MaxIPs,
 		&c.KeyExpiresAt,
@@ -49,13 +50,14 @@ LIMIT 1;
 
 func (r *VPNClientsRepo) Create(ctx context.Context, p model.CreateVPNClientParams) (model.VPNClient, error) {
 	const q = `
-INSERT INTO vpn_clients (client_uuid, telegram_user_id, max_ips, key_expires_at, is_active, note)
-VALUES ($1, $2, $3, $4, true, $5)
-RETURNING id, client_uuid, telegram_user_id, max_ips, key_expires_at, is_active, note, created_at, updated_at;
+INSERT INTO vpn_clients (client_uuid, server_id, telegram_user_id, max_ips, key_expires_at, is_active, note)
+VALUES ($1, $2, $3, $4, $5, true, $6)
+RETURNING id, client_uuid, server_id, telegram_user_id, max_ips, key_expires_at, is_active, note, created_at, updated_at;
 `
 	var c model.VPNClient
 	err := r.db.QueryRow(ctx, q,
 		p.ClientUUID,
+		p.ServerID,
 		p.TelegramUserID,
 		p.MaxIPs,
 		p.KeyExpiresAt.UTC(),
@@ -63,6 +65,7 @@ RETURNING id, client_uuid, telegram_user_id, max_ips, key_expires_at, is_active,
 	).Scan(
 		&c.ID,
 		&c.ClientUUID,
+		&c.ServerID,
 		&c.TelegramUserID,
 		&c.MaxIPs,
 		&c.KeyExpiresAt,

@@ -8,6 +8,7 @@ import (
 
 type Handlers struct {
 	DB        *pgxpool.Pool
+	Servers   *usecase.VPNServers
 	Clients   *usecase.VPNClients
 	XUIAccess *usecase.XUIAccess
 }
