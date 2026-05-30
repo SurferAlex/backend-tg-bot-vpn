@@ -11,6 +11,8 @@ const (
 	BtnAccess    = "🔑 Доступ"
 	BtnProvision = "⚡ Provision"
 	BtnRevoke    = "⛔ Revoke"
+	BtnExtend    = "📅 Продлить ключ"
+	BtnMaxIPs    = "Limit IP"
 
 	BtnBack   = "⬅️ Назад"
 	BtnCancel = "Отмена"
@@ -45,6 +47,16 @@ func ParseMaxIPsButton(text string) (int, bool) {
 	return 0, false
 }
 
+// IsMainMenuButton reports fixed reply-keyboard labels from the main menu.
+func IsMainMenuButton(text string) bool {
+	switch text {
+	case BtnCreate, BtnAccess, BtnProvision, BtnRevoke, BtnExtend, BtnMaxIPs:
+		return true
+	default:
+		return false
+	}
+}
+
 func MainMenuMarkup() tgbotapi.ReplyKeyboardMarkup {
 	kb := tgbotapi.NewReplyKeyboard(
 		tgbotapi.NewKeyboardButtonRow(
@@ -54,6 +66,10 @@ func MainMenuMarkup() tgbotapi.ReplyKeyboardMarkup {
 		tgbotapi.NewKeyboardButtonRow(
 			tgbotapi.NewKeyboardButton(BtnProvision),
 			tgbotapi.NewKeyboardButton(BtnRevoke),
+		),
+		tgbotapi.NewKeyboardButtonRow(
+			tgbotapi.NewKeyboardButton(BtnExtend),
+			tgbotapi.NewKeyboardButton(BtnMaxIPs),
 		),
 	)
 	kb.ResizeKeyboard = true

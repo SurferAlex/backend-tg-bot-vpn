@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"html"
 	"log"
@@ -106,6 +107,14 @@ func main() {
 	}
 	pending := map[int64]pendingNew{}
 
+	resolveClientRef := func(ref string) (string, error) {
+		client, err := vpn.ResolveClient(ctx, ref)
+		if err != nil {
+			return "", err
+		}
+		return client.ClientUUID, nil
+	}
+
 	listServerLabels := func() ([]botapp.ServerLabel, error) {
 		servers, err := vpn.ListServers(ctx)
 		if err != nil {
@@ -141,12 +150,15 @@ func main() {
 		actionGet       pendingActionKind = "get"
 		actionProvision pendingActionKind = "provision"
 		actionRevoke    pendingActionKind = "revoke"
+		actionExtend    pendingActionKind = "extend"
+		actionMaxIPs    pendingActionKind = "max_ips"
 	)
 
 	type pendingAction struct {
-		kind      pendingActionKind
-		createdAt time.Time
-		chatID    int64
+		kind       pendingActionKind
+		clientUUID string
+		createdAt  time.Time
+		chatID     int64
 	}
 
 	pendingActionByUser := map[int64]pendingAction{}
@@ -188,6 +200,47 @@ func main() {
 		}
 
 		if !update.Message.IsCommand() {
+			// Menu before create-flow state: stale «Создать ключ» must not swallow other buttons.
+			if botapp.IsMainMenuButton(text) {
+				delete(pending, from.ID)
+				delete(pendingActionByUser, from.ID)
+				switch text {
+				case botapp.BtnCreate:
+					startCreateFlow(update.Message.Chat.ID, from.ID)
+					continue
+				case botapp.BtnAccess:
+					pendingActionByUser[from.ID] = pendingAction{kind: actionGet, createdAt: time.Now(), chatID: update.Message.Chat.ID}
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Введите client_uuid (или нажмите «Отмена»):")
+					msg.ReplyMarkup = cancelMarkup
+					_, _ = bot.Send(msg)
+					continue
+				case botapp.BtnProvision:
+					pendingActionByUser[from.ID] = pendingAction{kind: actionProvision, createdAt: time.Now(), chatID: update.Message.Chat.ID}
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Введите client_uuid для provision (или нажмите «Отмена»):")
+					msg.ReplyMarkup = cancelMarkup
+					_, _ = bot.Send(msg)
+					continue
+				case botapp.BtnRevoke:
+					pendingActionByUser[from.ID] = pendingAction{kind: actionRevoke, createdAt: time.Now(), chatID: update.Message.Chat.ID}
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Введите client_uuid для revoke (или нажмите «Отмена»):")
+					msg.ReplyMarkup = cancelMarkup
+					_, _ = bot.Send(msg)
+					continue
+				case botapp.BtnExtend:
+					pendingActionByUser[from.ID] = pendingAction{kind: actionExtend, createdAt: time.Now(), chatID: update.Message.Chat.ID}
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Введите имя клиента или UUID (как при создании ключа):")
+					msg.ReplyMarkup = cancelMarkup
+					_, _ = bot.Send(msg)
+					continue
+				case botapp.BtnMaxIPs:
+					pendingActionByUser[from.ID] = pendingAction{kind: actionMaxIPs, createdAt: time.Now(), chatID: update.Message.Chat.ID}
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Введите имя клиента или UUID:")
+					msg.ReplyMarkup = cancelMarkup
+					_, _ = bot.Send(msg)
+					continue
+				}
+			}
+
 			if pa, ok := pendingActionByUser[from.ID]; ok {
 				if time.Since(pa.createdAt) > 5*time.Minute {
 					delete(pendingActionByUser, from.ID)
@@ -197,13 +250,114 @@ func main() {
 					continue
 				}
 
-				uuidArg := strings.TrimSpace(update.Message.Text)
-				if uuidArg == "" {
-					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "UUID пустой. Введите client_uuid или нажмите «Отмена».")
+				finishPendingMenu := func() {
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Меню:")
+					msg.ReplyMarkup = mainMenuMarkup
+					_, _ = bot.Send(msg)
+				}
+
+				if pa.clientUUID != "" && pa.kind == actionExtend {
+					var addDays int
+					switch text {
+					case botapp.BtnDays30:
+						addDays = 30
+					case botapp.BtnDays60:
+						addDays = 60
+					case botapp.BtnDays90:
+						addDays = 90
+					default:
+						msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Выбери срок: 30, 60 или 90 дней.")
+						msg.ReplyMarkup = newKeyMarkup
+						_, _ = bot.Send(msg)
+						continue
+					}
+					delete(pendingActionByUser, from.ID)
+					client, err := vpn.ExtendClient(ctx, pa.clientUUID, addDays)
+					if err != nil {
+						log.Printf("extend failed (clientUuid=%s, days=%d): %v", pa.clientUUID, addDays, err)
+						msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Не удалось продлить ключ. Проверьте имя/UUID и что ключ активен.")
+						msg.ReplyMarkup = mainMenuMarkup
+						_, _ = bot.Send(msg)
+						continue
+					}
+					info := fmt.Sprintf(
+						"Ключ продлён на %d дн.\nUUID: <code>%s</code>\nДействует до: %s\nЛимит IP: %d",
+						addDays, client.ClientUUID, client.KeyExpiresAt.UTC().Format("2006-01-02 15:04 UTC"), client.MaxIPs,
+					)
+					infoMsg := tgbotapi.NewMessage(update.Message.Chat.ID, info)
+					infoMsg.ParseMode = tgbotapi.ModeHTML
+					_, _ = bot.Send(infoMsg)
+					finishPendingMenu()
+					continue
+				}
+
+				if pa.clientUUID != "" && pa.kind == actionMaxIPs {
+					maxIPs, ok := botapp.ParseMaxIPsButton(text)
+					if !ok {
+						msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Выбери лимит IP: от 1 до 6.")
+						msg.ReplyMarkup = maxIPsMarkup
+						_, _ = bot.Send(msg)
+						continue
+					}
+					delete(pendingActionByUser, from.ID)
+					client, err := vpn.UpdateMaxIPs(ctx, pa.clientUUID, maxIPs)
+					if err != nil {
+						log.Printf("update max ips failed (clientUuid=%s, maxIps=%d): %v", pa.clientUUID, maxIPs, err)
+						msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Не удалось изменить лимит IP. Проверьте имя/UUID и что ключ активен.")
+						msg.ReplyMarkup = mainMenuMarkup
+						_, _ = bot.Send(msg)
+						continue
+					}
+					info := fmt.Sprintf(
+						"Лимит IP обновлён: %d\nUUID: <code>%s</code>\nДействует до: %s",
+						client.MaxIPs, client.ClientUUID, client.KeyExpiresAt.UTC().Format("2006-01-02 15:04 UTC"),
+					)
+					infoMsg := tgbotapi.NewMessage(update.Message.Chat.ID, info)
+					infoMsg.ParseMode = tgbotapi.ModeHTML
+					_, _ = bot.Send(infoMsg)
+					finishPendingMenu()
+					continue
+				}
+
+				ref := strings.TrimSpace(update.Message.Text)
+				if ref == "" {
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Ввод пустой. Введите имя или UUID (или «Отмена»).")
 					msg.ReplyMarkup = cancelMarkup
 					_, _ = bot.Send(msg)
 					continue
 				}
+
+				switch pa.kind {
+				case actionExtend, actionMaxIPs:
+					clientUUID, err := resolveClientRef(ref)
+					if err != nil {
+						if errors.Is(err, vpnapi.ErrAmbiguousClient) {
+							msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Найдено несколько клиентов с таким именем. Укажите UUID.")
+							msg.ReplyMarkup = cancelMarkup
+							_, _ = bot.Send(msg)
+							continue
+						}
+						log.Printf("resolve client failed (ref=%q): %v", ref, err)
+						msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Клиент не найден. Проверьте имя или UUID.")
+						msg.ReplyMarkup = cancelMarkup
+						_, _ = bot.Send(msg)
+						continue
+					}
+					pa.clientUUID = clientUUID
+					pendingActionByUser[from.ID] = pa
+					if pa.kind == actionExtend {
+						msg := tgbotapi.NewMessage(update.Message.Chat.ID, "На сколько продлить?")
+						msg.ReplyMarkup = newKeyMarkup
+						_, _ = bot.Send(msg)
+					} else {
+						msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Выбери новый лимит IP:")
+						msg.ReplyMarkup = maxIPsMarkup
+						_, _ = bot.Send(msg)
+					}
+					continue
+				}
+
+				uuidArg := ref
 
 				delete(pendingActionByUser, from.ID)
 
@@ -241,9 +395,7 @@ func main() {
 					_, _ = bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, "Ключ успешно отозван."))
 				}
 
-				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Меню:")
-				msg.ReplyMarkup = mainMenuMarkup
-				_, _ = bot.Send(msg)
+				finishPendingMenu()
 				continue
 			}
 
@@ -401,30 +553,6 @@ func main() {
 				continue
 			}
 
-			// Main menu actions
-			switch text {
-			case botapp.BtnCreate:
-				startCreateFlow(update.Message.Chat.ID, from.ID)
-				continue
-			case botapp.BtnAccess:
-				pendingActionByUser[from.ID] = pendingAction{kind: actionGet, createdAt: time.Now(), chatID: update.Message.Chat.ID}
-				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Введите client_uuid (или нажмите «Отмена»):")
-				msg.ReplyMarkup = cancelMarkup
-				_, _ = bot.Send(msg)
-				continue
-			case botapp.BtnProvision:
-				pendingActionByUser[from.ID] = pendingAction{kind: actionProvision, createdAt: time.Now(), chatID: update.Message.Chat.ID}
-				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Введите client_uuid для provision (или нажмите «Отмена»):")
-				msg.ReplyMarkup = cancelMarkup
-				_, _ = bot.Send(msg)
-				continue
-			case botapp.BtnRevoke:
-				pendingActionByUser[from.ID] = pendingAction{kind: actionRevoke, createdAt: time.Now(), chatID: update.Message.Chat.ID}
-				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Введите client_uuid для revoke (или нажмите «Отмена»):")
-				msg.ReplyMarkup = cancelMarkup
-				_, _ = bot.Send(msg)
-				continue
-			}
 		}
 
 		if update.Message.IsCommand() {
@@ -434,7 +562,7 @@ func main() {
 			case "menu":
 				sendMenu(update.Message.Chat.ID)
 			case "help":
-				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Команды: /start, /help, /new, /cancel, /get, /provision, /revoke")
+				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Команды: /start, /help, /new, /cancel, /get, /provision, /revoke\nПродление и Limit IP — кнопки в меню (имя или UUID → срок / IP).")
 				_, _ = bot.Send(msg)
 			case "new":
 				startCreateFlow(update.Message.Chat.ID, from.ID)

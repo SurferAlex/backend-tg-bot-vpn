@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -125,4 +126,112 @@ func (h *Handlers) DeactivateClient(c *gin.Context) {
 		return
 	}
 	c.Status(http.StatusNoContent)
+}
+
+type ExtendClientRequest struct {
+	AddDays int `json:"addDays"`
+}
+
+type UpdateMaxIPsRequest struct {
+	MaxIPs int `json:"maxIps"`
+}
+
+func (h *Handlers) ResolveClient(c *gin.Context) {
+	q := strings.TrimSpace(c.Query("q"))
+	if q == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "q is required"})
+		return
+	}
+	client, err := h.Clients.ResolveRef(c.Request.Context(), q)
+	if err != nil {
+		switch {
+		case errors.Is(err, usecase.ErrNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		case errors.Is(err, usecase.ErrAmbiguousRef):
+			c.JSON(http.StatusConflict, gin.H{"error": "ambiguous name, use client uuid"})
+		default:
+			log.Printf("resolve client failed: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		}
+		return
+	}
+	c.JSON(http.StatusOK, toClientResponse(client))
+}
+
+func (h *Handlers) ExtendClient(c *gin.Context) {
+	id, ok := parseClientUUID(c)
+	if !ok {
+		return
+	}
+	var req ExtendClientRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+	client, err := h.Clients.Extend(c.Request.Context(), id, req.AddDays)
+	if err != nil {
+		writeClientMutationError(c, err)
+		return
+	}
+	if err := h.provisionClient(c, id); err != nil {
+		log.Printf("extend client: provision failed (uuid=%s): %v", id, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "provision failed"})
+		return
+	}
+	c.JSON(http.StatusOK, toClientResponse(client))
+}
+
+func (h *Handlers) UpdateClientMaxIPs(c *gin.Context) {
+	id, ok := parseClientUUID(c)
+	if !ok {
+		return
+	}
+	var req UpdateMaxIPsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+	client, err := h.Clients.UpdateMaxIPs(c.Request.Context(), id, req.MaxIPs)
+	if err != nil {
+		writeClientMutationError(c, err)
+		return
+	}
+	if err := h.provisionClient(c, id); err != nil {
+		log.Printf("update max ips: provision failed (uuid=%s): %v", id, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "provision failed"})
+		return
+	}
+	c.JSON(http.StatusOK, toClientResponse(client))
+}
+
+func parseClientUUID(c *gin.Context) (uuid.UUID, bool) {
+	idStr := c.Param("uuid")
+	id, err := uuid.FromString(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid uuid"})
+		return uuid.Nil, false
+	}
+	return id, true
+}
+
+func writeClientMutationError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, usecase.ErrNotFound):
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+	case errors.Is(err, usecase.ErrInactive):
+		c.JSON(http.StatusBadRequest, gin.H{"error": "inactive"})
+	case errors.Is(err, usecase.ErrInvalidExtend), errors.Is(err, usecase.ErrInvalidMaxIPs), errors.Is(err, usecase.ErrAmbiguousRef):
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	default:
+		log.Printf("client mutation failed: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+	}
+}
+
+func (h *Handlers) provisionClient(c *gin.Context, id uuid.UUID) error {
+	if h.XUIAccess == nil {
+		return nil
+	}
+	_, err := h.XUIAccess.Provision(c.Request.Context(), id)
+	return err
 }
