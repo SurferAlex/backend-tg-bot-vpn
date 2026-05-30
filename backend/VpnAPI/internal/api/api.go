@@ -47,11 +47,14 @@ func RegisterRoutes(r *gin.Engine, h *handlers.Handlers, internalToken string) {
 	{
 		protected.GET("/servers", h.ListServers)
 		protected.POST("/clients", h.CreateClient)
+		protected.GET("/clients/resolve", h.ResolveClient)
 		protected.GET("/clients/:uuid", h.GetClient)
 		protected.POST("/clients/:uuid/deactivate", h.DeactivateClient)
 		protected.POST("/clients/:uuid/provision", h.ProvisionAccess)
 		protected.GET("/clients/:uuid/access", h.GetAccess)
 		protected.POST("/clients/:uuid/revoke", h.RevokeAccess)
+		protected.POST("/clients/:uuid/extend", h.ExtendClient)
+		protected.POST("/clients/:uuid/max-ips", h.UpdateClientMaxIPs)
 		protected.GET("/monitor/targets", h.ListMonitorTargets)
 	}
 }

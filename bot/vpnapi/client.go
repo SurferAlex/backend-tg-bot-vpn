@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 )
+
+var ErrAmbiguousClient = errors.New("ambiguous client name")
 
 type Server struct {
 	ID   string `json:"id"`
@@ -48,7 +51,7 @@ func New(baseURL, token string) *API {
 		baseURL: strings.TrimRight(baseURL, "/"),
 		token:   token,
 		http: &http.Client{
-			Timeout: 5 * time.Second,
+			Timeout: 30 * time.Second,
 		},
 	}
 }
@@ -108,6 +111,31 @@ func (a *API) CreateClient(ctx context.Context, req CreateClientRequest) (Client
 	var out Client
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return Client{}, fmt.Errorf("vpnapi create client: decode response failed: %w", err)
+	}
+	return out, nil
+}
+
+func (a *API) ResolveClient(ctx context.Context, ref string) (Client, error) {
+	u := a.baseURL + "/api/v1/clients/resolve?q=" + url.QueryEscape(strings.TrimSpace(ref))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return Client{}, err
+	}
+	req.Header.Set("X-Internal-Token", a.token)
+	resp, err := a.http.Do(req)
+	if err != nil {
+		return Client{}, fmt.Errorf("vpnapi resolve client request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusConflict {
+		return Client{}, ErrAmbiguousClient
+	}
+	if resp.StatusCode != http.StatusOK {
+		return Client{}, fmt.Errorf("vpnapi resolve client: status %d", resp.StatusCode)
+	}
+	var out Client
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return Client{}, fmt.Errorf("vpnapi resolve client: decode response failed: %w", err)
 	}
 	return out, nil
 }
@@ -185,6 +213,60 @@ func (a *API) GetAccess(ctx context.Context, clientUUID string) (Access, error) 
 	var out Access
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return Access{}, fmt.Errorf("vpnapi get access: decode response failed: %w", err)
+	}
+	return out, nil
+}
+
+func (a *API) ExtendClient(ctx context.Context, clientUUID string, addDays int) (Client, error) {
+	u := a.baseURL + "/api/v1/clients/" + url.PathEscape(clientUUID) + "/extend"
+	body, err := json.Marshal(map[string]int{"addDays": addDays})
+	if err != nil {
+		return Client{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(body))
+	if err != nil {
+		return Client{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Internal-Token", a.token)
+	resp, err := a.http.Do(req)
+	if err != nil {
+		return Client{}, fmt.Errorf("vpnapi extend client request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return Client{}, fmt.Errorf("vpnapi extend client: status %d", resp.StatusCode)
+	}
+	var out Client
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return Client{}, fmt.Errorf("vpnapi extend client: decode response failed: %w", err)
+	}
+	return out, nil
+}
+
+func (a *API) UpdateMaxIPs(ctx context.Context, clientUUID string, maxIPs int) (Client, error) {
+	u := a.baseURL + "/api/v1/clients/" + url.PathEscape(clientUUID) + "/max-ips"
+	body, err := json.Marshal(map[string]int{"maxIps": maxIPs})
+	if err != nil {
+		return Client{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(body))
+	if err != nil {
+		return Client{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Internal-Token", a.token)
+	resp, err := a.http.Do(req)
+	if err != nil {
+		return Client{}, fmt.Errorf("vpnapi update max ips request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return Client{}, fmt.Errorf("vpnapi update max ips: status %d", resp.StatusCode)
+	}
+	var out Client
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return Client{}, fmt.Errorf("vpnapi update max ips: decode response failed: %w", err)
 	}
 	return out, nil
 }
