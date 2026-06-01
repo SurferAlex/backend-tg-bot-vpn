@@ -12,7 +12,7 @@ const (
 
 	DeeplinkAddPrefix = "happ://add/"
 
-	DefaultOpenRedirectPublicURL = "https://panel.alexsurfervpn.space/happ/open"
+	DefaultOpenRedirectPublicURL = "https://sub.alexsurfervpn.space/happ/open"
 )
 
 // AddConfigURL builds happ://add/… for vless:// or https:// subscription links.
