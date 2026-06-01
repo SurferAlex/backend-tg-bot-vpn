@@ -12,7 +12,6 @@ const (
 
 	DeeplinkAddPrefix = "happ://add/"
 
-	// DefaultOpenRedirectPublicURL used when HAPP_REDIRECT_PUBLIC_URL is not set (nginx /happ/ → :8091/open).
 	DefaultOpenRedirectPublicURL = "https://panel.alexsurfervpn.space/happ/open"
 )
 
@@ -31,22 +30,17 @@ func AddConfigURL(config string) string {
 	return DeeplinkAddPrefix + config
 }
 
-// OpenAppURL opens Happ with optional config (vless:// or https:// subscription).
-func OpenAppURL(config string) string {
-	return AddConfigURL(config)
-}
-
-// OpenRedirectURL is the https link for Telegram inline «Открыть Happ» (redirects to happ://add/…).
-func OpenRedirectURL(publicBase, vless string) string {
+// OpenRedirectURL builds https link for Telegram inline button → redirect → happ://routing/….
+func OpenRedirectURL(publicBase, routingB64 string) string {
 	base := strings.TrimSuffix(strings.TrimSpace(publicBase), "/")
 	if base == "" || !strings.HasPrefix(base, "https://") {
 		return ""
 	}
-	vless = strings.TrimSpace(vless)
-	if vless == "" {
-		return base
+	routingB64 = strings.TrimSpace(routingB64)
+	if routingB64 == "" {
+		routingB64 = DefaultRoutingProfileB64
 	}
-	return base + "?vless=" + url.QueryEscape(vless)
+	return base + "?routing=" + url.QueryEscape(routingB64)
 }
 
 // ResolveOpenRedirectBase returns env override or default public redirect URL.

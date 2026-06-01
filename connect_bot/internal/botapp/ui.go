@@ -24,14 +24,15 @@ func MainMenuMarkup() tgbotapi.ReplyKeyboardMarkup {
 func WelcomeText(botUsername string) string {
 	_ = botUsername
 	return "Добро пожаловать!\n\n" +
-		"1. Вставьте ключ vless:// в чат или получите у админа.\n" +
-		"2. «Подключить Happ» → «Скачать Happ» (App Store) или «Открыть Happ» (добавить ключ)."
+		"1. Создайте профиль на https://routing.happ.su\n" +
+		"2. Отправьте боту ссылку happ://routing/… или JSON\n" +
+		"3. «Открыть Happ» — добавит маршрутизацию в приложение"
 }
 
 func HelpText() string {
 	return "Порядок:\n" +
-		"1. Отправьте vless:// в чат (бот запомнит ключ).\n" +
-		"2. Меню «Подключить Happ» или /connect.\n" +
-		"3. «Скачать Happ» — App Store; «Открыть Happ» — happ://add/ваш ключ.\n\n" +
+		"1. Профиль на https://routing.happ.su → скопировать ссылку\n" +
+		"2. Вставить в чат боту\n" +
+		"3. «Подключить Happ» → «Открыть Happ»\n\n" +
 		"Команды: /start, /help, /connect"
 }

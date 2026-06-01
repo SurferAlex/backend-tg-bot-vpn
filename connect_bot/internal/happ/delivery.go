@@ -17,43 +17,37 @@ const (
 type DeliveryOptions struct {
 	ExtraCaption     string
 	IOSAppStoreURL   string
-	OpenRedirectBase string // https://host/happ/open — for inline «Открыть Happ»
-	VlessURL         string // vless://… → happ://add/vless://…
+	OpenRedirectBase string
+	RoutingB64       string // base64 JSON routing profile
 }
 
-// BuildMessageText returns instructions (key may be sent separately or pasted earlier).
+// BuildMessageText returns instructions.
 func BuildMessageText(opts DeliveryOptions) string {
 	var b strings.Builder
 	if s := strings.TrimSpace(opts.ExtraCaption); s != "" {
 		b.WriteString(s)
 		b.WriteString("\n\n")
 	}
-	b.WriteString("1️⃣ «Скачать Happ» — App Store, если приложения ещё нет\n")
-	b.WriteString("2️⃣ «Открыть Happ» — добавит ваш ключ в Happ\n")
-	b.WriteString("\n")
-	b.WriteString("Сначала отправьте ключ vless:// в этот чат.")
+	b.WriteString("1️⃣ «Скачать Happ» — App Store\n")
+	b.WriteString("2️⃣ «Открыть Happ» — профиль маршрутизации (routing)\n\n")
+	b.WriteString("Отправьте ссылку с https://routing.happ.su, JSON профиля или happ://routing/…")
 	return b.String()
 }
 
-// InlineDownloadURL always opens App Store.
 func InlineDownloadURL(opts DeliveryOptions) string {
 	return AppStoreURL(opts.IOSAppStoreURL)
 }
 
-// InlineOpenURL is https → happ://add/{vless} (Telegram rejects happ:// in buttons).
+// InlineOpenURL → https redirect → happ://routing/onadd/{base64}.
 func InlineOpenURL(opts DeliveryOptions) string {
-	vless := strings.TrimSpace(opts.VlessURL)
-	if vless == "" {
-		return AppStoreURL(opts.IOSAppStoreURL)
-	}
+	b64 := ResolveRoutingB64(opts.RoutingB64, "")
 	base := ResolveOpenRedirectBase(opts.OpenRedirectBase)
-	if u := OpenRedirectURL(base, vless); u != "" {
+	if u := OpenRedirectURL(base, b64); u != "" {
 		return u
 	}
 	return AppStoreURL(opts.IOSAppStoreURL)
 }
 
-// BuildInlineKeyboard uses https only (Telegram allows http(s)/tg, not happ://).
 func BuildInlineKeyboard(opts DeliveryOptions) tgbotapi.InlineKeyboardMarkup {
 	return tgbotapi.NewInlineKeyboardMarkup(
 		tgbotapi.NewInlineKeyboardRow(
@@ -68,12 +62,10 @@ func BuildInlineKeyboard(opts DeliveryOptions) tgbotapi.InlineKeyboardMarkup {
 	)
 }
 
-// ImportHelpText is sent when user taps «Happ уже установлен».
 func ImportHelpText() string {
-	return "Откройте Happ → «+» → «Импорт из буфера» или снова нажмите «Открыть Happ» после отправки vless:// в чат."
+	return "Создайте профиль на https://routing.happ.su → скопируйте ссылку happ://routing/… и отправьте боту."
 }
 
-// DeliverIOS sends Happ onboarding (instructions + inline buttons).
 func DeliverIOS(bot *tgbotapi.BotAPI, chatID int64, opts DeliveryOptions) error {
 	msg := tgbotapi.NewMessage(chatID, BuildMessageText(opts))
 	msg.DisableWebPagePreview = true
