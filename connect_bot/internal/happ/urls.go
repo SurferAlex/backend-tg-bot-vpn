@@ -30,7 +30,17 @@ func AddConfigURL(config string) string {
 	return DeeplinkAddPrefix + config
 }
 
-// OpenRedirectURL builds https link for Telegram inline button → redirect → happ://routing/….
+// OpenRedirectURLVless builds https link with ?vless= for VPN key import.
+func OpenRedirectURLVless(publicBase, vless string) string {
+	base := strings.TrimSuffix(strings.TrimSpace(publicBase), "/")
+	vless = strings.TrimSpace(vless)
+	if base == "" || !strings.HasPrefix(base, "https://") || vless == "" {
+		return ""
+	}
+	return base + "?vless=" + url.QueryEscape(vless)
+}
+
+// OpenRedirectURL builds https link with ?routing= for routing profile.
 func OpenRedirectURL(publicBase, routingB64 string) string {
 	base := strings.TrimSuffix(strings.TrimSpace(publicBase), "/")
 	if base == "" || !strings.HasPrefix(base, "https://") {

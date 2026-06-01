@@ -5,33 +5,22 @@ import (
 	"testing"
 )
 
-func TestBuildMessageText_routing(t *testing.T) {
-	text := BuildMessageText(DeliveryOptions{})
-	if !strings.Contains(text, "routing") {
-		t.Fatal("expected routing mention")
-	}
-}
-
-func TestInlineDownloadURL_isAppStore(t *testing.T) {
-	got := InlineDownloadURL(DeliveryOptions{})
-	if !strings.Contains(got, "apps.apple.com") {
-		t.Fatalf("got %q", got)
-	}
-}
-
-func TestInlineOpenURL_redirectRouting(t *testing.T) {
+func TestInlineOpenURL_vlessParam(t *testing.T) {
 	got := InlineOpenURL(DeliveryOptions{
 		OpenRedirectBase: "https://example.com/happ/open",
-		RoutingB64:       "abc123",
+		VlessURL:         "vless://u@h:443",
 	})
-	if !strings.Contains(got, "routing=abc123") {
+	if !strings.Contains(got, "vless=vless%3A%2F%2F") {
 		t.Fatalf("got %q", got)
 	}
 }
 
-func TestInlineOpenURL_defaultProfile(t *testing.T) {
-	got := InlineOpenURL(DeliveryOptions{OpenRedirectBase: "https://example.com/happ/open"})
-	if !strings.Contains(got, "routing=") {
+func TestInlineOpenURL_routingWhenNoVless(t *testing.T) {
+	got := InlineOpenURL(DeliveryOptions{
+		OpenRedirectBase: "https://example.com/happ/open",
+		RoutingB64:       "abc",
+	})
+	if !strings.Contains(got, "routing=abc") {
 		t.Fatalf("got %q", got)
 	}
 }

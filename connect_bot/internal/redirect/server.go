@@ -45,12 +45,21 @@ func (s *Server) handleOpen(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	b64 := r.URL.Query().Get("routing")
-	b64 = happ.ResolveRoutingB64(b64, s.defaultRoutingB64)
-	target := happ.OpenRoutingTarget(b64, s.routingAutoOnAdd)
 
-	if r.Method == http.MethodGet && r.URL.Query().Get("html") == "1" {
+	vless := r.URL.Query().Get("vless")
+	routing := r.URL.Query().Get("routing")
+	target, _ := happ.ResolveOpenTarget(vless, routing, s.routingAutoOnAdd, s.defaultRoutingB64)
+
+	// ?redirect=1 — чистый 302 (для curl); по умолчанию HTML+JS для Telegram/WKWebView.
+	useHTML := r.URL.Query().Get("redirect") != "1"
+	if r.Method == http.MethodGet && (useHTML || r.URL.Query().Get("html") == "1") {
 		writeOpenHTML(w, target)
+		return
+	}
+
+	if r.Method == http.MethodHead {
+		w.Header().Set("Location", target)
+		w.WriteHeader(http.StatusFound)
 		return
 	}
 	http.Redirect(w, r, target, http.StatusFound)
@@ -66,14 +75,23 @@ func writeOpenHTML(w http.ResponseWriter, target string) {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="refresh" content="0;url=%s">
 <title>Открыть Happ</title>
 </head>
 <body>
-<p>Открываем Happ (routing)…</p>
-<p><a href="%s">Нажмите здесь, если приложение не открылось</a></p>
+<p>Открываем Happ…</p>
+<p><a id="open" href="%s" style="font-size:18px">Открыть Happ</a></p>
+<script>
+(function () {
+  var u = %q;
+  try { window.location.replace(u); } catch (e) {}
+  setTimeout(function () {
+    var a = document.getElementById("open");
+    if (a) a.focus();
+  }, 300);
+})();
+</script>
 </body>
-</html>`, escaped, escaped)
+</html>`, escaped, target)
 }
 
 func htmlEscape(s string) string {
@@ -107,7 +125,7 @@ func (s *Server) Run(ctx context.Context) error {
 		defer cancel()
 		_ = srv.Shutdown(shutdownCtx)
 	}()
-	log.Printf("happ redirect: listening on %s (GET /open → happ://routing/)", s.addr)
+	log.Printf("happ redirect: listening on %s (GET /open)", s.addr)
 	err := srv.ListenAndServe()
 	if err == http.ErrServerClosed {
 		return nil
