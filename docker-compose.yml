@@ -40,6 +40,18 @@ services:
       - 8.8.8.8
     # наружу не публикуем
 
+  connect_bot:
+    build:
+      context: ./connect_bot
+    env_file:
+      - ./connect_bot/.env
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    restart: unless-stopped
+    expose:
+      - "8091"
+
   redis:
     image: redis:7-alpine
     restart: unless-stopped
@@ -63,6 +75,7 @@ services:
     container_name: vpnplatform-nginx
     depends_on:
       - vpnapi
+      - connect_bot
     ports:
       - "80:80"
     volumes:

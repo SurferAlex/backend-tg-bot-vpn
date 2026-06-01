@@ -1,0 +1,15 @@
+.git/
+.gitignore
+.idea/
+.vscode/
+.DS_Store
+.env
+.env.*
+**/*_test.go
+**/testdata/
+bin/
+dist/
+build/
+out/
+tmp/
+*.log
