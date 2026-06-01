@@ -13,7 +13,8 @@ import (
 	"connect-bot/internal/handlers"
 	"connect-bot/internal/happ"
 	"connect-bot/internal/redirect"
-	"connect-bot/internal/userkeys"
+	"connect-bot/internal/userrouting"
+	"connect-bot/internal/uservless"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/joho/godotenv"
@@ -46,15 +47,16 @@ func main() {
 		log.Printf("connect_bot: happ open redirect %s", openRedirect)
 	}
 
-	redirectSrv := redirect.NewServer(cfg.HappRedirectListenAddr)
+	redirectSrv := redirect.NewServer(cfg.HappRedirectListenAddr, cfg.HappRoutingOnAdd, cfg.HappDefaultRoutingB64)
 	go func() {
 		if err := redirectSrv.Run(ctx); err != nil {
 			log.Printf("happ redirect server stopped: %v", err)
 		}
 	}()
 
-	vpnKeys := handlers.NewVPNKeyHandler(bot, cfg.HappIOSAppStore, cfg.HappRedirectPublicURL, cfg.HappDefaultVless)
-	keys := &userkeys.Store{}
+	vpnKeys := handlers.NewVPNKeyHandler(bot, cfg.HappIOSAppStore, cfg.HappRedirectPublicURL, cfg.HappDefaultRoutingB64)
+	vlessKeys := &uservless.Store{}
+	routingProfiles := &userrouting.Store{}
 	menu := botapp.MainMenuMarkup()
 
 	sendWelcome := func(chatID int64) {
@@ -66,7 +68,7 @@ func main() {
 	}
 
 	sendHappConnect := func(chatID int64) {
-		if err := vpnKeys.SendOpenHapp(chatID, "", keys.Get(chatID)); err != nil {
+		if err := vpnKeys.SendOpenHapp(chatID, "", vlessKeys.Get(chatID), routingProfiles.Get(chatID)); err != nil {
 			log.Printf("send happ connect failed (chatId=%d): %v", chatID, err)
 			_, _ = bot.Send(tgbotapi.NewMessage(chatID, "Не удалось отправить инструкцию. Попробуйте позже."))
 		}
@@ -101,10 +103,23 @@ func main() {
 			chatID := update.Message.Chat.ID
 
 			if strings.HasPrefix(strings.ToLower(text), "vless://") {
-				keys.Set(chatID, text)
-				if err := vpnKeys.SendOpenHapp(chatID, "Ключ получен. Нажмите «Открыть Happ»:", text); err != nil {
+				vlessKeys.Set(chatID, text)
+				if err := vpnKeys.SendOpenHapp(chatID, "Ключ получен. Нажмите «Открыть Happ»:", text, ""); err != nil {
 					log.Printf("send happ after vless failed (chatId=%d): %v", chatID, err)
-					_, _ = bot.Send(tgbotapi.NewMessage(chatID, "Ключ сохранён, но не удалось отправить кнопки. Проверьте HAPP_REDIRECT_PUBLIC_URL и пересоберите бота."))
+					_, _ = bot.Send(tgbotapi.NewMessage(chatID, "Ключ сохранён, но кнопки не отправились."))
+				}
+				continue
+			}
+
+			if isRoutingMessage(text) {
+				b64, err := happ.ParseRoutingInput(text)
+				if err != nil {
+					_, _ = bot.Send(tgbotapi.NewMessage(chatID, "Не распознан профиль routing."))
+					continue
+				}
+				routingProfiles.Set(chatID, b64)
+				if err := vpnKeys.SendOpenHapp(chatID, "Профиль routing сохранён:", "", b64); err != nil {
+					log.Printf("send happ after routing failed (chatId=%d): %v", chatID, err)
 				}
 				continue
 			}
@@ -135,4 +150,13 @@ func main() {
 			}
 		}
 	}
+}
+
+func isRoutingMessage(text string) bool {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return false
+	}
+	lower := strings.ToLower(text)
+	return strings.Contains(lower, "happ://routing/") || strings.HasPrefix(text, "{")
 }

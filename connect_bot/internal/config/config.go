@@ -9,9 +9,10 @@ import (
 type Config struct {
 	TelegramBotToken        string
 	HappIOSAppStore         string
-	HappRedirectPublicURL   string // https URL for inline «Открыть Happ», e.g. https://host/happ/open
-	HappRedirectListenAddr  string // default :8091
-	HappDefaultVless        string // fallback vless:// for «Открыть Happ» if user did not paste key
+	HappRedirectPublicURL   string
+	HappRedirectListenAddr  string
+	HappDefaultRoutingB64   string
+	HappRoutingOnAdd        bool // happ://routing/onadd/ vs /add/
 }
 
 func Load() (Config, error) {
@@ -23,11 +24,16 @@ func Load() (Config, error) {
 	if publicURL != "" && !strings.HasPrefix(publicURL, "https://") {
 		return Config{}, fmt.Errorf("HAPP_REDIRECT_PUBLIC_URL must start with https://")
 	}
+	onAdd := true
+	if v := strings.TrimSpace(os.Getenv("HAPP_ROUTING_ONADD")); v != "" {
+		onAdd = v == "1" || strings.EqualFold(v, "true") || strings.EqualFold(v, "yes")
+	}
 	return Config{
 		TelegramBotToken:       token,
 		HappIOSAppStore:        strings.TrimSpace(os.Getenv("HAPP_IOS_APP_STORE_URL")),
 		HappRedirectPublicURL:  publicURL,
 		HappRedirectListenAddr: strings.TrimSpace(os.Getenv("HAPP_REDIRECT_LISTEN")),
-		HappDefaultVless:       strings.TrimSpace(os.Getenv("HAPP_DEFAULT_VLESS")),
+		HappDefaultRoutingB64:  strings.TrimSpace(os.Getenv("HAPP_DEFAULT_ROUTING_B64")),
+		HappRoutingOnAdd:       onAdd,
 	}, nil
 }

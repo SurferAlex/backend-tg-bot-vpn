@@ -15,16 +15,23 @@ const defaultListen = ":8091"
 
 // Server serves HTTPS-facing redirect to happ:// (opened from Telegram inline buttons).
 type Server struct {
-	addr string
-	mux  *http.ServeMux
+	addr              string
+	mux               *http.ServeMux
+	routingAutoOnAdd  bool
+	defaultRoutingB64 string
 }
 
-func NewServer(listenAddr string) *Server {
+func NewServer(listenAddr string, routingAutoOnAdd bool, defaultRoutingB64 string) *Server {
 	addr := strings.TrimSpace(listenAddr)
 	if addr == "" {
 		addr = defaultListen
 	}
-	s := &Server{addr: addr, mux: http.NewServeMux()}
+	s := &Server{
+		addr:              addr,
+		mux:               http.NewServeMux(),
+		routingAutoOnAdd:  routingAutoOnAdd,
+		defaultRoutingB64: strings.TrimSpace(defaultRoutingB64),
+	}
 	s.mux.HandleFunc("/open", s.handleOpen)
 	s.mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -38,39 +45,53 @@ func (s *Server) handleOpen(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	config := r.URL.Query().Get("vless")
-	if config == "" {
-		config = r.URL.Query().Get("sub")
+
+	vless := r.URL.Query().Get("vless")
+	routing := r.URL.Query().Get("routing")
+	target, _ := happ.ResolveOpenTarget(vless, routing, s.routingAutoOnAdd, s.defaultRoutingB64)
+
+	// ?redirect=1 — чистый 302 (для curl); по умолчанию HTML+JS для Telegram/WKWebView.
+	useHTML := r.URL.Query().Get("redirect") != "1"
+	if r.Method == http.MethodGet && (useHTML || r.URL.Query().Get("html") == "1") {
+		writeOpenHTML(w, target)
+		return
 	}
-	target := happ.OpenAppURL(config)
+
 	if r.Method == http.MethodHead {
 		w.Header().Set("Location", target)
 		w.WriteHeader(http.StatusFound)
 		return
 	}
-	writeOpenHTML(w, target)
+	http.Redirect(w, r, target, http.StatusFound)
 }
 
 func writeOpenHTML(w http.ResponseWriter, target string) {
 	escaped := htmlEscape(target)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	// Some in-app browsers follow 302 to custom schemes; HTML fallback helps Safari.
 	w.WriteHeader(http.StatusOK)
 	_, _ = fmt.Fprintf(w, `<!DOCTYPE html>
 <html lang="ru">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="refresh" content="0;url=%s">
 <title>Открыть Happ</title>
 </head>
 <body>
 <p>Открываем Happ…</p>
-<p><a href="%s">Нажмите здесь, если приложение не открылось</a></p>
-<p>Подтвердите добавление конфигурации в Happ.</p>
+<p><a id="open" href="%s" style="font-size:18px">Открыть Happ</a></p>
+<script>
+(function () {
+  var u = %q;
+  try { window.location.replace(u); } catch (e) {}
+  setTimeout(function () {
+    var a = document.getElementById("open");
+    if (a) a.focus();
+  }, 300);
+})();
+</script>
 </body>
-</html>`, escaped, escaped)
+</html>`, escaped, target)
 }
 
 func htmlEscape(s string) string {
@@ -92,7 +113,6 @@ func htmlEscape(s string) string {
 	return b.String()
 }
 
-// Run listens until ctx is cancelled.
 func (s *Server) Run(ctx context.Context) error {
 	srv := &http.Server{
 		Addr:              s.addr,

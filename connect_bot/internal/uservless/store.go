@@ -1,11 +1,11 @@
-package userkeys
+package uservless
 
 import (
 	"strings"
 	"sync"
 )
 
-// Store keeps the last vless:// key per Telegram chat (user pasted or forwarded).
+// Store keeps the last vless:// key per Telegram chat.
 type Store struct {
 	mu sync.Map
 }
